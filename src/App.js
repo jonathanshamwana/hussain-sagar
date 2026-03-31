@@ -13,6 +13,9 @@ const SPAWN_Y_MIN  = 170;
 // Paint should sit visible for ~5s before it begins to fade.
 const STROKE_HOLD  = 5000;
 const STROKE_FADE  = 8000;
+const COLOR_DURATION = 25000; // gradual single transition to brown
+const LAKE_GREEN     = { r: 0x6B, g: 0x8F, b: 0x5E };
+const LAKE_BROWN     = { r: 0x7A, g: 0x5A, b: 0x3A };
 
 const LAKE_PATH_STR =
   'M 361,182 ' +
@@ -77,6 +80,16 @@ function makeBrushImage() {
   return bc;
 }
 const BRUSH_IMG = makeBrushImage();
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function lerpColor(c1, c2, t) {
+  return {
+    r: lerp(c1.r, c2.r, t),
+    g: lerp(c1.g, c2.g, t),
+    b: lerp(c1.b, c2.b, t),
+  };
+}
+function rgbStr(c) { return `rgb(${c.r.toFixed(0)}, ${c.g.toFixed(0)}, ${c.b.toFixed(0)})`; }
 
 function strokeOpacity(age) {
   // Keep opacity tied purely to time so it doesn't vanish faster when more
@@ -254,6 +267,15 @@ export default function App() {
 
     let prevInLake = false;
 
+    // Lake shade transitions once from green to brown over COLOR_DURATION.
+    let shade = {
+      start: LAKE_GREEN,
+      end:   LAKE_BROWN,
+      startTs: performance.now(),
+      duration: COLOR_DURATION,
+      done: false,
+    };
+
     function onMouseMove(e) {
       const r  = canvas.getBoundingClientRect();
       s.mx     = (e.clientX - r.left) * (GW / r.width);
@@ -330,13 +352,20 @@ export default function App() {
       blueCtx.drawImage(paintC, 0, 0);
       blueCtx.globalCompositeOperation = 'source-over';
 
+      // Lake base shade tween
+      const shadeT = Math.min(1, (ts - shade.startTs) / shade.duration);
+      const lakeFillColor = rgbStr(lerpColor(shade.start, shade.end, shadeT));
+      if (!shade.done && shadeT >= 1) {
+        shade.done = true;
+      }
+
       // ---- Render scene ----
       ctx.save();
       ctx.scale(sx, sy);
 
       ctx.fillStyle = '#111120'; ctx.fillRect(0, 0, GW, GH);
 
-      ctx.fillStyle = '#6B8F5E'; ctx.fill(lakePath);
+      ctx.fillStyle = lakeFillColor; ctx.fill(lakePath);
 
       ctx.save();
       ctx.globalAlpha = 0.28; ctx.fillStyle = '#638758';
@@ -471,6 +500,29 @@ export default function App() {
                 Your task:{' '}
                 <Hi bright>Clean the lake.</Hi>
               </p>
+
+              <div style={{
+                position: 'relative',
+                marginBottom: 28,
+                border: '1px solid #1E3740',
+                borderRadius: 4,
+                overflow: 'hidden',
+                boxShadow: '0 0 24px rgba(0,0,0,0.35)',
+              }}>
+                <iframe
+                  title="Hussain Sagar Map"
+                  src="https://www.openstreetmap.org/export/embed.html?bbox=78.462%2C17.404%2C78.489%2C17.437&layer=mapnik&marker=17.4239%2C78.4738"
+                  style={{ width: '100%', height: 240, border: 'none' }}
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+                <div style={{
+                  position: 'absolute',
+                  inset: 0,
+                  pointerEvents: 'none',
+                  background: 'linear-gradient(to bottom, rgba(14,15,26,0.25) 0%, rgba(14,15,26,0.55) 100%)',
+                }} />
+              </div>
 
               <button
                 onClick={handlePlay}
