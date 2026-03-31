@@ -267,11 +267,11 @@ export default function App() {
 
     let prevInLake = false;
 
-    // Lake shade transitions once from green to brown over COLOR_DURATION.
+    // Lake shade transitions once from green to brown after the game starts.
     let shade = {
       start: LAKE_GREEN,
       end:   LAKE_BROWN,
-      startTs: performance.now(),
+      startTs: null, // set when gameplay begins
       duration: COLOR_DURATION,
       done: false,
     };
@@ -353,10 +353,16 @@ export default function App() {
       blueCtx.globalCompositeOperation = 'source-over';
 
       // Lake base shade tween
-      const shadeT = Math.min(1, (ts - shade.startTs) / shade.duration);
-      const lakeFillColor = rgbStr(lerpColor(shade.start, shade.end, shadeT));
-      if (!shade.done && shadeT >= 1) {
-        shade.done = true;
+      if (!shade.startTs && gameActive.current) {
+        shade.startTs = ts;
+      }
+      let lakeFillColor;
+      if (shade.startTs) {
+        const shadeT = Math.min(1, (ts - shade.startTs) / shade.duration);
+        lakeFillColor = rgbStr(lerpColor(shade.start, shade.end, shadeT));
+        if (!shade.done && shadeT >= 1) shade.done = true;
+      } else {
+        lakeFillColor = rgbStr(LAKE_GREEN);
       }
 
       // ---- Render scene ----
