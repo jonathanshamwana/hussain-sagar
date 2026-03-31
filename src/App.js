@@ -9,8 +9,10 @@ const SPAWN_EVERY  = 1000;
 const FIGURE_SPEED = 0.65;
 const LAKE_RADIUS  = 168;
 const MAX_FIGURES  = 28;
-const STROKE_HOLD  = 4000;
-const STROKE_FADE  = 7000;
+const SPAWN_Y_MIN  = 170;
+// Paint should sit visible for ~5s before it begins to fade.
+const STROKE_HOLD  = 5000;
+const STROKE_FADE  = 8000;
 
 const LAKE_PATH_STR =
   'M 361,182 ' +
@@ -76,10 +78,11 @@ function makeBrushImage() {
 }
 const BRUSH_IMG = makeBrushImage();
 
-function strokeOpacity(age, arrived) {
-  const effectiveAge = age * (1 + arrived * 0.12);
-  if (effectiveAge < STROKE_HOLD) return 1.0;
-  return Math.max(0, 1 - (effectiveAge - STROKE_HOLD) / STROKE_FADE);
+function strokeOpacity(age) {
+  // Keep opacity tied purely to time so it doesn't vanish faster when more
+  // figures gather around the lake.
+  if (age < STROKE_HOLD) return 1.0;
+  return Math.max(0, 1 - (age - STROKE_HOLD) / STROKE_FADE);
 }
 
 function rrect(ctx, x, y, w, h, r) {
@@ -144,7 +147,7 @@ function drawCitizen(ctx) {
 function drawFigure(ctx, fig) {
   ctx.save();
   ctx.translate(fig.x, fig.y);
-  if (fig.vx < 0) ctx.scale(-1, 1);
+  if (fig.vx < 0) ctx.scale(-1/3, 1/3); else ctx.scale(1/3, 1/3);
   if (fig.type === 'worker') drawWorker(ctx); else drawCitizen(ctx);
   ctx.restore();
 }
@@ -152,12 +155,12 @@ function drawFigure(ctx, fig) {
 function spawnFigure(figures) {
   if (figures.length >= MAX_FIGURES) return;
   const type = Math.random() < 0.5 ? 'worker' : 'citizen';
-  const side = Math.floor(Math.random() * 4);
+  const side = Math.floor(Math.random() * 3);
   let x, y;
-  if      (side === 0) { x = Math.random() * GW; y = -20; }
-  else if (side === 1) { x = GW + 20;            y = Math.random() * GH; }
-  else if (side === 2) { x = Math.random() * GW; y = GH + 20; }
-  else                 { x = -20;                y = Math.random() * GH; }
+  const yRange = SPAWN_Y_MIN + Math.random() * (GH + 20 - SPAWN_Y_MIN);
+  if      (side === 0) { x = GW + 20; y = yRange; }
+  else if (side === 1) { x = Math.random() * GW; y = GH + 20; }
+  else                 { x = -20;     y = yRange; }
   const dx = LAKE_CENTER.x - x;
   const dy = LAKE_CENTER.y - y;
   const d  = Math.hypot(dx, dy);
@@ -169,6 +172,19 @@ function makeOffscreen() {
   const c = document.createElement('canvas');
   c.width = GW; c.height = GH;
   return [c, c.getContext('2d')];
+}
+
+function Hi({ children, bright }) {
+  return (
+    <span style={{
+      color: bright ? '#7BD0E4' : '#5BAFD6',
+      background: bright ? 'rgba(91,175,214,0.18)' : 'rgba(91,175,214,0.11)',
+      padding: '1px 5px',
+      borderRadius: 2,
+    }}>
+      {children}
+    </span>
+  );
 }
 
 export default function App() {
@@ -183,12 +199,17 @@ export default function App() {
     mx: 400, my: 350, inLake: false,
   });
   const [showModal, setShowModal] = useState(true);
+  const [filling,   setFilling]   = useState(false);
 
   const handlePlay = () => {
+    setFilling(true);
+    if (audioRef.current) audioRef.current.play().catch(() => {});
+  };
+
+  const handleFillEnd = () => {
     setShowModal(false);
     gameActive.current = true;
     state.current.lastSpawn = performance.now();
-    if (audioRef.current) audioRef.current.play().catch(() => {});
   };
 
   useEffect(() => {
@@ -197,11 +218,11 @@ export default function App() {
     const s      = state.current;
 
     // Pre-populate 10 initial figures scattered around the lake
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
       const angle = (i / 10) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
       const dist  = LAKE_RADIUS + 30 + Math.random() * 140;
       const x     = Math.max(30, Math.min(GW - 30, LAKE_CENTER.x + Math.cos(angle) * dist));
-      const y     = Math.max(50, Math.min(GH - 50, LAKE_CENTER.y + Math.sin(angle) * dist));
+      const y     = Math.max(SPAWN_Y_MIN, Math.min(GH - 50, LAKE_CENTER.y + Math.sin(angle) * dist));
       const type  = Math.random() < 0.5 ? 'worker' : 'citizen';
       const dx    = LAKE_CENTER.x - x;
       const dy    = LAKE_CENTER.y - y;
@@ -217,7 +238,7 @@ export default function App() {
 
     const [paintC, paintCtx] = makeOffscreen();
     const [blueC,  blueCtx]  = makeOffscreen();
-    const [hitC,   hitCtx]   = makeOffscreen();
+    const [,       hitCtx]   = makeOffscreen();
 
     // Emoji cursor
     const ec = document.createElement('canvas');
@@ -285,14 +306,14 @@ export default function App() {
 
       // Purge fully-faded strokes (use max arrived for conservative expiry check)
       const maxAge = (STROKE_HOLD + STROKE_FADE);
-      s.strokes = s.strokes.filter(st => (ts - st.ts) * (1 + arrived * 0.12) < maxAge);
+      s.strokes = s.strokes.filter(st => (ts - st.ts) < maxAge);
 
       // Render paint canvas fresh each frame from stroke list
       paintCtx.clearRect(0, 0, GW, GH);
       if (s.strokes.length > 0) {
         paintCtx.globalCompositeOperation = 'lighter';
         s.strokes.forEach(st => {
-          const op = strokeOpacity(ts - st.ts, arrived);
+          const op = strokeOpacity(ts - st.ts);
           if (op <= 0) return;
           paintCtx.globalAlpha = op;
           paintCtx.drawImage(BRUSH_IMG, st.x - BRUSH_RADIUS, st.y - BRUSH_RADIUS);
@@ -371,47 +392,107 @@ export default function App() {
         <div style={{
           position: 'absolute', inset: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(10, 10, 20, 0.88)',
+          background: 'rgba(8, 8, 18, 0.90)',
         }}>
           <div style={{
-            background: '#13141F',
-            border: '1px solid #2A3A30',
+            position: 'relative',
+            overflow: 'hidden',
+            background: '#0E0F1A',
+            border: '1px solid #243428',
             borderRadius: 4,
-            padding: '48px 52px',
-            maxWidth: 520,
-            color: '#8FA8A0',
+            padding: '44px 52px 48px',
+            maxWidth: 530,
+            width: '90%',
             fontFamily: 'Georgia, serif',
-            lineHeight: 1.75,
+            lineHeight: 1.8,
+            boxShadow: '0 0 60px rgba(0,0,0,0.6)',
           }}>
-            <p style={{ margin: '0 0 20px', fontSize: 15, color: '#7A9890' }}>
-              Hussain Sagar was built in 1562 as Hyderabad's primary drinking
-              water source. Today, 78 million litres of sewage and 15 million
-              litres of industrial effluent enter it daily. Multiple restoration
-              projects have been announced. None have worked.
-            </p>
-            <p style={{ margin: '0 0 36px', fontSize: 15, color: '#A8C8C0', fontStyle: 'italic' }}>
-              Your task: Clean the lake.
-            </p>
-            <button
-              onClick={handlePlay}
+
+            {/* Rising water fill */}
+            <div
+              onTransitionEnd={filling ? handleFillEnd : undefined}
               style={{
-                display: 'block',
-                width: '100%',
-                padding: '14px 0',
-                background: 'transparent',
-                border: '1px solid #3A6050',
+                position: 'absolute', inset: 0,
+                background: 'linear-gradient(to top, #071822 0%, #0E3D52 35%, #1F6880 65%, #3A9AB8 88%, #5BAFD6 100%)',
+                transform: filling ? 'translateY(0%)' : 'translateY(106%)',
+                transition: filling ? 'transform 1.6s cubic-bezier(0.4, 0.0, 0.2, 1)' : 'none',
+                zIndex: 2,
                 borderRadius: 3,
-                color: '#6A9880',
-                fontFamily: 'Georgia, serif',
-                fontSize: 15,
-                letterSpacing: 3,
-                cursor: 'pointer',
               }}
-              onMouseEnter={e => { e.target.style.background = '#1E2E28'; e.target.style.color = '#8ABAA8'; }}
-              onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.color = '#6A9880'; }}
             >
-              PLAY GAME
-            </button>
+              {/* Wave crest */}
+              <div style={{
+                position: 'absolute',
+                top: -9, left: '-3%', width: '106%', height: 18,
+                background: '#3A9AB8',
+                borderRadius: '50%',
+                animation: filling ? 'waveCrest 1.8s ease-in-out infinite' : 'none',
+              }} />
+            </div>
+
+            {/* Modal content */}
+            <div style={{ position: 'relative', zIndex: 1 }}>
+
+              <div style={{
+                color: '#8FA8A0',
+                fontFamily: 'Georgia, serif',
+                fontSize: 40,
+                letterSpacing: 6,
+                marginBottom: 28,
+                lineHeight: 1,
+                textAlign: 'center',
+              }}>
+                DEAD WATER
+              </div>
+              <div style={{
+                color: '#3A5048',
+                fontFamily: 'sans-serif',
+                fontSize: 10,
+                letterSpacing: 3,
+                marginBottom: 28,
+                marginTop: -18,
+                textAlign: 'center',
+              }}>
+                HUSSAIN SAGAR · HYDERABAD
+              </div>
+
+              <p style={{ margin: '0 0 16px', fontSize: 14.5, color: '#6A8880' }}>
+                Hussain Sagar was built in{' '}
+                <Hi>1562</Hi>
+                {' '}as Hyderabad's primary drinking water source. Today,{' '}
+                <Hi>78 million litres of sewage</Hi>
+                {' '}and{' '}
+                <Hi>15 million litres of industrial effluent</Hi>
+                {' '}enter it daily. Multiple restoration projects have been announced.{' '}
+                <span style={{ color: '#D8EAE4' }}>None have worked.</span>
+              </p>
+
+              <p style={{ margin: '0 0 36px', fontSize: 14.5, color: '#6A8880', fontStyle: 'italic' }}>
+                Your task:{' '}
+                <Hi bright>Clean the lake.</Hi>
+              </p>
+
+              <button
+                onClick={handlePlay}
+                disabled={filling}
+                style={{
+                  display: 'block', width: '100%', padding: '13px 0',
+                  background: 'transparent',
+                  border: '1px solid #2E5040',
+                  borderRadius: 3,
+                  color: '#5A8870',
+                  fontFamily: 'Georgia, serif',
+                  fontSize: 14,
+                  letterSpacing: 4,
+                  cursor: filling ? 'default' : 'pointer',
+                }}
+                onMouseEnter={e => { if (!filling) { e.target.style.background = '#162420'; e.target.style.color = '#7AADA0'; }}}
+                onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.color = '#5A8870'; }}
+              >
+                PLAY GAME
+              </button>
+
+            </div>
           </div>
         </div>
       )}
